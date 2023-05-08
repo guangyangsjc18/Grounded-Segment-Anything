@@ -168,6 +168,13 @@ def draw_box(box, draw, label):
 
         draw.text((box[0], box[1]), label)
 
+def add_margin(pil_img, top, right, bottom, left, color):
+    width, height = pil_img.size
+    new_width = width + right + left
+    new_height = height + top + bottom
+    result = Image.new(pil_img.mode, (new_width, new_height), color)
+    result.paste(pil_img, (left, top))
+    return result
 
 
 config_file = 'GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
@@ -185,7 +192,7 @@ sam_predictor = None
 sam_automask_generator = None
 inpaint_pipeline = None
 
-def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, inpaint_mode, scribble_mode, openai_api_key):
+def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key):
 
     global blip_processor, blip_model, groundingdino_model, sam_predictor, sam_automask_generator, inpaint_pipeline
 
@@ -348,17 +355,27 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
         dilation_img = diff_img.filter(ImageFilter.MaxFilter(boundary_margin))
         #diff = mask.astype(np.uint8)*255 - np.asarray(shapen_mask_pil)
         diff_has_difference = np.where(np.asarray(dilation_img)!=0)
-        print(diff_has_difference[0].size/(mask.shape[0]*mask.shape[1]))
+        #print(diff_has_difference[0].size/(mask.shape[0]*mask.shape[1]))
         mask_to_process = mask.copy()
         for i in range(diff_has_difference[0].size):
             mask_to_process[diff_has_difference[0][i]][diff_has_difference[1][i]] = 255
-        print(np.where(mask==0)[0].size/(mask.shape[0]*mask.shape[1]))
-        print(np.where(mask_to_process==0)[0].size/(mask.shape[0]*mask.shape[1]))
+        #print(np.where(mask==0)[0].size/(mask.shape[0]*mask.shape[1]))
+        #print(np.where(mask_to_process==0)[0].size/(mask.shape[0]*mask.shape[1]))
         mask_pil = Image.fromarray(mask_to_process)
         #mask_pil = Image.fromarray(mask_to_process.astype(np.uint8) * 255, 'L')
 
 
-        
+        image_pil = image_pil.resize((512, 512))
+        mask_pil = mask_pil.resize((512, 512))
+
+        width_, height_ = mask_pil.size
+        top = (height - height_) // 2
+        bottom = (height - height_) // 2
+        left = (width - width_) // 2
+        right = (width - width_) // 2
+        mask_pil = add_margin(mask_pil, top, right, bottom, left, 255)
+        image_pil = add_margin(image_pil, top, right, bottom, left, 255)
+
         if inpaint_pipeline is None:
             inpaint_pipeline = StableDiffusionInpaintPipeline.from_pretrained(
             "./dreamshaper_5-inpainting", torch_dtype=torch.float16
@@ -367,18 +384,18 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
         images = inpaint_pipeline(
                 prompt=inpaint_prompt, 
-                image=image_pil.resize((512, 512)), 
-                mask_image=mask_pil.resize((512, 512)),
+                image=image_pil, 
+                mask_image=mask_pil,
                 num_images_per_prompt=4,
-                height=512,
-                width=512,
+                height=height,
+                width=width,
                 ).images
         #outpaint_pipeline = StableDiffusionPanoramaPipeline.from_pretrained(
                             #"./dreamshaper_5-inpainting", torch_dtype=torch.float16
                                         #)
         #outpaint_pipeline = outpaint_pipeline.to("cuda")
         #images = outpaint_pipeline(prompt=inpaint_prompt, image=image_inpaint, num_images_per_prompt=4).images
-        print(len(images))
+        #print(len(images))
         #image = image.resize(size)
 
         return [images[0],images[1],images[2], images[3], mask_pil]
@@ -404,9 +421,11 @@ if __name__ == "__main__":
             with gr.Column():
                 input_image = gr.Image(source='upload', type="pil", value="assets/demo1.jpg", tool="sketch")
                 task_type = gr.Dropdown(["scribble", "automask", "det", "seg", "inpainting", "automatic"], value="automatic", label="task_type")
-                text_prompt = gr.Textbox(label="Text Prompt")
+                text_prompt = gr.Textbox(label="Text Prompt for SAM ")
                 inpaint_prompt = gr.Textbox(label="Inpaint Prompt")
                 boundary_margin = gr.Slider(label="Boundary margin", minimum=1, maximum=7, value=3, step=2)
+                width  = gr.Slider(label="Image width", minimum=512, maximum=1024, value=512, step=32)
+                height = gr.Slider(label="Image height", minimum=512, maximum=1024, value=512, step=32)
                 run_button = gr.Button(label="Run")
                 with gr.Accordion("Advanced options", open=False):
                     box_threshold = gr.Slider(
@@ -428,7 +447,7 @@ if __name__ == "__main__":
                 ).style(preview=True, grid=5, object_fit="scale-down")
 
         run_button.click(fn=run_grounded_sam, inputs=[
-                        input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
+                        input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
 
     block.queue(concurrency_count=100)
     block.launch(server_name='0.0.0.0', server_port=args.port, debug=args.debug, share=args.share)
