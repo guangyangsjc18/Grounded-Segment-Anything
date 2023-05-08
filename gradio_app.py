@@ -9,7 +9,7 @@ import argparse
 import numpy as np
 import torch
 import torchvision
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
 
 # Grounding DINO
 import GroundingDINO.groundingdino.datasets.transforms as T
@@ -23,7 +23,7 @@ import numpy as np
 
 # diffusers
 import torch
-from diffusers import StableDiffusionInpaintPipeline
+from diffusers import StableDiffusionInpaintPipeline,StableDiffusionPanoramaPipeline
 
 # BLIP
 from transformers import BlipProcessor, BlipForConditionalGeneration
@@ -185,7 +185,7 @@ sam_predictor = None
 sam_automask_generator = None
 inpaint_pipeline = None
 
-def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, inpaint_mode, scribble_mode, openai_api_key):
+def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, inpaint_mode, scribble_mode, openai_api_key):
 
     global blip_processor, blip_model, groundingdino_model, sam_predictor, sam_automask_generator, inpaint_pipeline
 
@@ -336,18 +336,52 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
             masks = torch.sum(masks, dim=0).unsqueeze(0)
             masks = torch.where(masks > 0, True, False)
         mask = masks[0][0].cpu().numpy() # simply choose the first mask, which will be refine in the future release
-        mask_pil = Image.fromarray(mask)
+        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255, 'L')
+        #mask_blur=3
+        #blur = ImageFilter.GaussianBlur(mask_blur)
+        #mask_pil = mask_pil.filter(blur)
+        #mask_pil = mask_pil.filter(ImageFilter.SHARPEN)
+        smooth_mask_pil = mask_pil.filter(ImageFilter.SMOOTH)
+        shapen_mask_pil = mask_pil.filter(ImageFilter.SHARPEN)
+        diff = mask.astype(np.uint8)*255 - np.asarray(smooth_mask_pil)
+        diff_img = Image.fromarray(diff, "L")
+        dilation_img = diff_img.filter(ImageFilter.MaxFilter(boundary_margin))
+        #diff = mask.astype(np.uint8)*255 - np.asarray(shapen_mask_pil)
+        diff_has_difference = np.where(np.asarray(dilation_img)!=0)
+        print(diff_has_difference[0].size/(mask.shape[0]*mask.shape[1]))
+        mask_to_process = mask.copy()
+        for i in range(diff_has_difference[0].size):
+            mask_to_process[diff_has_difference[0][i]][diff_has_difference[1][i]] = 255
+        print(np.where(mask==0)[0].size/(mask.shape[0]*mask.shape[1]))
+        print(np.where(mask_to_process==0)[0].size/(mask.shape[0]*mask.shape[1]))
+        mask_pil = Image.fromarray(mask_to_process)
+        #mask_pil = Image.fromarray(mask_to_process.astype(np.uint8) * 255, 'L')
+
+
         
         if inpaint_pipeline is None:
             inpaint_pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-            "runwayml/stable-diffusion-inpainting", torch_dtype=torch.float16
+            "./dreamshaper_5-inpainting", torch_dtype=torch.float16
             )
             inpaint_pipeline = inpaint_pipeline.to("cuda")
 
-        image = inpaint_pipeline(prompt=inpaint_prompt, image=image_pil.resize((512, 512)), mask_image=mask_pil.resize((512, 512))).images[0]
-        image = image.resize(size)
+        images = inpaint_pipeline(
+                prompt=inpaint_prompt, 
+                image=image_pil.resize((512, 512)), 
+                mask_image=mask_pil.resize((512, 512)),
+                num_images_per_prompt=4,
+                height=512,
+                width=512,
+                ).images
+        #outpaint_pipeline = StableDiffusionPanoramaPipeline.from_pretrained(
+                            #"./dreamshaper_5-inpainting", torch_dtype=torch.float16
+                                        #)
+        #outpaint_pipeline = outpaint_pipeline.to("cuda")
+        #images = outpaint_pipeline(prompt=inpaint_prompt, image=image_inpaint, num_images_per_prompt=4).images
+        print(len(images))
+        #image = image.resize(size)
 
-        return [image, mask_pil]
+        return [images[0],images[1],images[2], images[3], mask_pil]
     else:
         print("task_type:{} error!".format(task_type))
 
@@ -372,6 +406,7 @@ if __name__ == "__main__":
                 task_type = gr.Dropdown(["scribble", "automask", "det", "seg", "inpainting", "automatic"], value="automatic", label="task_type")
                 text_prompt = gr.Textbox(label="Text Prompt")
                 inpaint_prompt = gr.Textbox(label="Inpaint Prompt")
+                boundary_margin = gr.Slider(label="Boundary margin", minimum=1, maximum=7, value=3, step=2)
                 run_button = gr.Button(label="Run")
                 with gr.Accordion("Advanced options", open=False):
                     box_threshold = gr.Slider(
@@ -390,10 +425,10 @@ if __name__ == "__main__":
             with gr.Column():
                 gallery = gr.Gallery(
                     label="Generated images", show_label=False, elem_id="gallery"
-                ).style(preview=True, grid=2, object_fit="scale-down")
+                ).style(preview=True, grid=5, object_fit="scale-down")
 
         run_button.click(fn=run_grounded_sam, inputs=[
-                        input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
+                        input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
 
     block.queue(concurrency_count=100)
     block.launch(server_name='0.0.0.0', server_port=args.port, debug=args.debug, share=args.share)
