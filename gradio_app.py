@@ -192,7 +192,7 @@ sam_predictor = None
 sam_automask_generator = None
 inpaint_pipeline = None
 
-def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key):
+def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, negative_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key):
 
     global blip_processor, blip_model, groundingdino_model, sam_predictor, sam_automask_generator, inpaint_pipeline
 
@@ -389,6 +389,7 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
                 num_images_per_prompt=4,
                 height=height,
                 width=width,
+                negative_prompt=negative_prompt,
                 ).images
         #outpaint_pipeline = StableDiffusionPanoramaPipeline.from_pretrained(
                             #"./dreamshaper_5-inpainting", torch_dtype=torch.float16
@@ -423,6 +424,7 @@ if __name__ == "__main__":
                 task_type = gr.Dropdown(["scribble", "automask", "det", "seg", "inpainting", "automatic"], value="automatic", label="task_type")
                 text_prompt = gr.Textbox(label="Text Prompt for SAM ")
                 inpaint_prompt = gr.Textbox(label="Inpaint Prompt")
+                negative_prompt = gr.Textbox(label="Inpaint Negative Prompt")
                 boundary_margin = gr.Slider(label="Boundary margin", minimum=1, maximum=7, value=3, step=2)
                 width  = gr.Slider(label="Image width", minimum=512, maximum=1024, value=512, step=32)
                 height = gr.Slider(label="Image height", minimum=512, maximum=1024, value=512, step=32)
@@ -447,7 +449,7 @@ if __name__ == "__main__":
                 ).style(preview=True, grid=5, object_fit="scale-down")
 
         run_button.click(fn=run_grounded_sam, inputs=[
-                        input_image, text_prompt, task_type, inpaint_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
+                        input_image, text_prompt, task_type, inpaint_prompt, negative_prompt, box_threshold, text_threshold, iou_threshold, boundary_margin, width, height, inpaint_mode, scribble_mode, openai_api_key], outputs=gallery)
 
     block.queue(concurrency_count=100)
     block.launch(server_name='0.0.0.0', server_port=args.port, debug=args.debug, share=args.share)
